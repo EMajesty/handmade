@@ -1,14 +1,16 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_render.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 
 #define internal static
 #define local_persist static
 #define global_variable static
 
 global_variable SDL_Texture *Texture;
-global_variable void *Pixels;
-global_variable int TextureWidth;
+global_variable void *BitmapMemory;
+global_variable int BitmapWidth;
+global_variable int BytesPerPixel = 4;
 
 internal void SDLResizeTexture(SDL_Renderer *Renderer, int Width, int Height)
 {
@@ -16,19 +18,21 @@ internal void SDLResizeTexture(SDL_Renderer *Renderer, int Width, int Height)
     {
         SDL_DestroyTexture(Texture);
     }
-    if (Pixels)
+    if (BitmapMemory)
     {
-        free(Pixels);
+        // free(BitmapMemory);
+        munmap(BitmapMemory, Width * Height * BytesPerPixel);
     }
 
     Texture = SDL_CreateTexture(Renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, Width, Height);
 
-    void *Pixels = malloc(Width * Height * 4);
+    // BitmapMemory = malloc(Width * Height * BytesPerPixel);
+    BitmapMemory = mmap(0, Width * Height * BytesPerPixel, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 }
 
 internal void SDLUpdateWindow(SDL_Window *Window, SDL_Renderer *Renderer)
 {
-    if (SDL_UpdateTexture(Texture, 0, Pixels, TextureWidth * 4))
+    if (SDL_UpdateTexture(Texture, 0, BitmapMemory, BitmapWidth * BytesPerPixel))
     {
         // TODO:
     }
@@ -75,7 +79,7 @@ bool HandleEvent(SDL_Event *Event)
     return (ShouldQuit);
 }
 
-int main(int argc, char **argv)
+int main(/*int argc, char **argv*/)
 {
     if (SDL_Init(SDL_INIT_VIDEO) != 0)
     {
@@ -111,5 +115,5 @@ int main(int argc, char **argv)
     }
 
     SDL_Quit();
-    return(0);
+    return (0);
 }
