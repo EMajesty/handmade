@@ -282,6 +282,9 @@ int main(/*int argc, char **argv*/)
 
     SDLInitGameControllers();
 
+    uint64_t PerfCountFrequency = SDL_GetPerformanceFrequency();
+    uint64_t LastCounter = SDL_GetPerformanceCounter();
+
     if (Window)
     {
         SDL_Renderer *Renderer = SDL_CreateRenderer(Window, -1, 0);
@@ -390,8 +393,8 @@ int main(/*int argc, char **argv*/)
                             XOffset += 4;
                         }
 
-                        XOffset += LeftStickX >> 12;
-                        YOffset += LeftStickY >> 12;
+                        XOffset += LeftStickX / 4096;
+                        YOffset += LeftStickY / 4096;
 
                         printf("%d %d\n", LeftStickX, LeftStickY);
                     }
@@ -417,6 +420,14 @@ int main(/*int argc, char **argv*/)
 
                 // ++XOffset;
                 // YOffset += 2;
+                uint64_t EndCounter = SDL_GetPerformanceCounter();
+                uint64_t CounterElapsed = EndCounter - LastCounter;
+
+                double MSPerFrame = (((1000.0f * (double)CounterElapsed) / (double)PerfCountFrequency));
+                double FPS = (double)PerfCountFrequency / (double)CounterElapsed;
+
+                printf("%.02f ms/f, %.02ff/s\n", MSPerFrame, FPS);
+                LastCounter = EndCounter;
             }
         }
         else
