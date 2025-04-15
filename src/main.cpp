@@ -1,14 +1,6 @@
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_events.h>
-#include <SDL2/SDL_gamecontroller.h>
-#include <SDL2/SDL_haptic.h>
-#include <SDL2/SDL_joystick.h>
-#include <SDL2/SDL_keycode.h>
-#include <SDL2/SDL_render.h>
-#include <SDL2/SDL_video.h>
 #include <cstdint>
-#include <cstdio>
-#include <stdlib.h>
+#include <math.h>
 #include <sys/mman.h>
 
 #define internal static
@@ -16,6 +8,26 @@
 #define global_variable static
 
 #define MAX_CONTROLLERS 4
+
+#define Pi32 3.14159265358979f
+
+struct sdl_sound_output
+{
+    int SamplesPerSecond;
+    int ToneHz;
+    int16_t ToneVolume;
+    uint32_t RunningSampleIndex;
+    int WavePeriod;
+    int BytesPerSample;
+};
+
+struct sdl_audio_ring_buffer
+{
+    int Size;
+    int WriteCursor;
+    int PlayCursor;
+    void *Data;
+};
 
 struct sdl_offscreen_buffer
 {
@@ -34,7 +46,102 @@ struct sdl_window_dimension
     int Height;
 };
 
+global_variable sdl_audio_ring_buffer AudioRingBuffer;
 global_variable sdl_offscreen_buffer GlobalBackBuffer;
+
+SDL_GameController *ControllerHandles[MAX_CONTROLLERS];
+SDL_Haptic *RumbleHandles[MAX_CONTROLLERS];
+
+internal void SDLFillSoundBuffer(sdl_sound_output *SoundOutput, int BytesToWrite)
+{
+    if (BytesToWrite)
+    {
+        void *SoundBuffer = malloc(BytesToWrite);
+        int16_t *SampleOut = (int16_t *)SoundBuffer;
+        int SampleCount = BytesToWrite / SoundOutput->BytesPerSample;
+        for (int SampleIndex = 0; SampleIndex < SampleCount; ++SampleIndex)
+        {
+            float_t t = 2.0f * Pi32 * SoundOutput->RunningSampleIndex / (float_t)SoundOutput->WavePeriod;
+            float_t SineValue = sinf(t);
+            int16_t SampleValue = (int16_t)(SineValue * SoundOutput->ToneVolume);
+            *SampleOut++ = SampleValue;
+            *SampleOut++ = SampleValue;
+            ++SoundOutput->RunningSampleIndex;
+        }
+        SDL_QueueAudio(1, SoundBuffer, BytesToWrite);
+        free(SoundBuffer);
+    }
+}
+
+internal void SDLInitAudio(int32_t SamplesPerSecond, int32_t BufferSize)
+{
+    SDL_AudioSpec AudioSettings = {0};
+
+    AudioSettings.freq = SamplesPerSecond;
+    AudioSettings.format = AUDIO_S16LSB;
+    AudioSettings.channels = 2;
+    AudioSettings.samples = BufferSize;
+
+    SDL_OpenAudio(&AudioSettings, 0);
+    // SDL_OpenAudioDevice(0, 0, &AudioSettings, 0, 0);
+
+    if (AudioSettings.format != AUDIO_S16LSB)
+    {
+        printf("Can't set audio format to AUDIO_S16LSB\n");
+        SDL_CloseAudio();
+    }
+}
+
+internal void SDLInitGameControllers()
+{
+    int MaxJoysticks = SDL_NumJoysticks();
+    int ControllerIndex = 0;
+    for (int JoystickIndex = 0; JoystickIndex < MaxJoysticks; ++JoystickIndex)
+    {
+        if (!SDL_IsGameController(JoystickIndex))
+        {
+            continue;
+        }
+        if (ControllerIndex >= MAX_CONTROLLERS)
+        {
+            break;
+        }
+        ControllerHandles[ControllerIndex] = SDL_GameControllerOpen(JoystickIndex);
+
+        // Rumble
+        SDL_Joystick *JoystickHandle = SDL_GameControllerGetJoystick(ControllerHandles[ControllerIndex]);
+        RumbleHandles[ControllerIndex] = SDL_HapticOpenFromJoystick(JoystickHandle);
+
+        if (SDL_HapticRumbleInit(RumbleHandles[ControllerIndex]) != 0)
+        {
+            printf("No rumble support for controller %d\n", ControllerIndex);
+            SDL_HapticClose(RumbleHandles[ControllerIndex]);
+            RumbleHandles[ControllerIndex] = 0;
+        }
+        else
+        {
+            printf("Rumble enabled for controller %d\n", ControllerIndex);
+        }
+
+        ControllerIndex++;
+    }
+}
+
+internal void SDLCloseGameControllers()
+{
+    for (int ControllerIndex = 0; ControllerIndex < MAX_CONTROLLERS; ++ControllerIndex)
+    {
+        if (ControllerHandles[ControllerIndex])
+        {
+            if (RumbleHandles[ControllerIndex])
+            {
+                SDL_HapticClose(RumbleHandles[ControllerIndex]);
+            }
+
+            SDL_GameControllerClose(ControllerHandles[ControllerIndex]);
+        }
+    }
+}
 
 sdl_window_dimension SDLGetWindowDimension(SDL_Window *Window)
 {
@@ -135,7 +242,12 @@ bool HandleEvent(SDL_Event *Event)
     case SDL_KEYDOWN:
     case SDL_KEYUP:
     {
-        // SDL_Keycode KeyCode = Event->key.keysym.sym;
+        SDL_Keycode KeyCode = Event->key.keysym.sym;
+        bool AltKeyDown = (Event->key.keysym.mod & KMOD_ALT);
+        if (KeyCode == SDLK_F4 && AltKeyDown)
+        {
+            ShouldQuit = true;
+        }
 
         if (!Event->key.repeat)
         {
@@ -149,47 +261,13 @@ bool HandleEvent(SDL_Event *Event)
 
 int main(/*int argc, char **argv*/)
 {
-    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC);
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC);
 
     SDL_Window *Window = SDL_CreateWindow(
         "Hell World", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1920, 1080, SDL_WINDOW_RESIZABLE
     );
 
-    // Open controllers
-    SDL_GameController *ControllerHandles[MAX_CONTROLLERS];
-    SDL_Haptic *RumbleHandles[MAX_CONTROLLERS];
-
-    int MaxJoysticks = SDL_NumJoysticks();
-    int ControllerIndex = 0;
-    for (int JoystickIndex = 0; JoystickIndex < MaxJoysticks; ++JoystickIndex)
-    {
-        if (!SDL_IsGameController(JoystickIndex))
-        {
-            continue;
-        }
-        if (ControllerIndex >= MAX_CONTROLLERS)
-        {
-            break;
-        }
-        ControllerHandles[ControllerIndex] = SDL_GameControllerOpen(JoystickIndex);
-
-        // Rumble
-        SDL_Joystick *JoystickHandle = SDL_GameControllerGetJoystick(ControllerHandles[ControllerIndex]);
-        RumbleHandles[ControllerIndex] = SDL_HapticOpenFromJoystick(JoystickHandle);
-
-        if (SDL_HapticRumbleInit(RumbleHandles[ControllerIndex]) != 0)
-        {
-            printf("No rumble support for controller %d\n", ControllerIndex);
-            SDL_HapticClose(RumbleHandles[ControllerIndex]);
-            RumbleHandles[ControllerIndex] = 0;
-        }
-        else
-        {
-            printf("Rumble enabled for controller %d\n", ControllerIndex);
-        }
-
-        ControllerIndex++;
-    }
+    SDLInitGameControllers();
 
     if (Window)
     {
@@ -204,6 +282,18 @@ int main(/*int argc, char **argv*/)
             int XOffset = 0;
             int YOffset = 0;
 
+            sdl_sound_output SoundOutput = {0};
+
+            SoundOutput.SamplesPerSecond = 48000;
+            SoundOutput.ToneHz = 256;
+            SoundOutput.ToneVolume = 3000;
+            SoundOutput.RunningSampleIndex = 0;
+            SoundOutput.WavePeriod = SoundOutput.SamplesPerSecond / SoundOutput.ToneHz;
+            SoundOutput.BytesPerSample = sizeof(int16_t) * 2;
+
+            SDLInitAudio(SoundOutput.SamplesPerSecond, SoundOutput.SamplesPerSecond * SoundOutput.BytesPerSample / 60);
+            bool SoundIsPlaying = false;
+
             while (Running)
             {
                 SDL_Event Event;
@@ -216,7 +306,6 @@ int main(/*int argc, char **argv*/)
                     }
                 }
 
-                // TODO: Poll this more often?
                 for (int ControllerIndex = 0; ControllerIndex < MAX_CONTROLLERS; ++ControllerIndex)
                 {
                     if (SDL_GameControllerGetAttached(ControllerHandles[ControllerIndex]))
@@ -296,6 +385,19 @@ int main(/*int argc, char **argv*/)
                 }
 
                 RenderWeirdGradient(&GlobalBackBuffer, XOffset, YOffset);
+
+                // Sound test
+                int TargetQueueBytes = SoundOutput.SamplesPerSecond * SoundOutput.BytesPerSample;
+                int BytesToWrite = TargetQueueBytes - SDL_GetQueuedAudioSize(1);
+
+                SDLFillSoundBuffer(&SoundOutput, BytesToWrite);
+
+                if (!SoundIsPlaying)
+                {
+                    SDL_PauseAudio(0);
+                    SoundIsPlaying = true;
+                }
+
                 SDLUpdateWindow(&GlobalBackBuffer, Renderer);
 
                 // ++XOffset;
@@ -312,19 +414,9 @@ int main(/*int argc, char **argv*/)
         printf("No window");
     }
 
-    // Close haptics and controllers
-    for (int ControllerIndex = 0; ControllerIndex < MAX_CONTROLLERS; ++ControllerIndex)
-    {
-        if (RumbleHandles[ControllerIndex])
-        {
-            SDL_HapticClose(RumbleHandles[ControllerIndex]);
-        }
+    SDLCloseGameControllers();
 
-        if (ControllerHandles[ControllerIndex])
-        {
-            SDL_GameControllerClose(ControllerHandles[ControllerIndex]);
-        }
-    }
+    SDL_CloseAudio();
 
     SDL_Quit();
     return (0);
