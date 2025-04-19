@@ -2,6 +2,9 @@
 #include <cstdint>
 #include <math.h>
 #include <sys/mman.h>
+#include <x86intrin.h>
+
+#include "game.h"
 
 #define internal static
 #define local_persist static
@@ -31,21 +34,19 @@ struct sdl_audio_ring_buffer
     void *Data;
 };
 
+struct sdl_window_dimension
+{
+    int Width;
+    int Height;
+};
+
 struct sdl_offscreen_buffer
 {
-    // Pixels are always 32 bits wide, memory order BB GG RR XX
     SDL_Texture *Texture;
     void *Memory;
     int Width;
     int Height;
     int Pitch;
-    // int BytesPerPixel;
-};
-
-struct sdl_window_dimension
-{
-    int Width;
-    int Height;
 };
 
 global_variable sdl_sound_output SoundOutput;
@@ -153,26 +154,6 @@ sdl_window_dimension SDLGetWindowDimension(SDL_Window *Window)
     return (Result);
 }
 
-internal void RenderWeirdGradient(sdl_offscreen_buffer *Buffer, int BlueOffset, int GreenOffset)
-{
-    uint8_t *Row = (uint8_t *)Buffer->Memory;
-
-    for (int Y = 0; Y < Buffer->Height; ++Y)
-    {
-        uint32_t *Pixel = (uint32_t *)Row;
-
-        for (int X = 0; X < Buffer->Width; ++X)
-        {
-            uint8_t Blue = (X + BlueOffset);
-            uint8_t Green = (Y + GreenOffset);
-
-            *Pixel++ = ((Green << 8) | Blue);
-        }
-
-        Row += Buffer->Pitch;
-    }
-}
-
 internal void SDLResizeTexture(sdl_offscreen_buffer *Buffer, SDL_Renderer *Renderer, int Width, int Height)
 {
     const int BytesPerPixel = 4;
@@ -196,7 +177,7 @@ internal void SDLResizeTexture(sdl_offscreen_buffer *Buffer, SDL_Renderer *Rende
 
     Buffer->Pitch = Width * BytesPerPixel;
 
-    RenderWeirdGradient(&GlobalBackBuffer, 0, 0);
+    // RenderWeirdGradient(&GlobalBackBuffer, 0, 0);
 }
 
 internal void SDLUpdateWindow(sdl_offscreen_buffer *Buffer, SDL_Renderer *Renderer)
@@ -285,6 +266,8 @@ int main(/*int argc, char **argv*/)
     uint64_t PerfCountFrequency = SDL_GetPerformanceFrequency();
     uint64_t LastCounter = SDL_GetPerformanceCounter();
 
+    uint64_t LastCycleCount = _rdtsc();
+
     if (Window)
     {
         SDL_Renderer *Renderer = SDL_CreateRenderer(Window, -1, 0);
@@ -292,11 +275,16 @@ int main(/*int argc, char **argv*/)
         if (Renderer)
         {
             bool Running = true;
-            // int Width, Height;
             sdl_window_dimension Dimension = SDLGetWindowDimension(Window);
             SDLResizeTexture(&GlobalBackBuffer, Renderer, Dimension.Width, Dimension.Height);
             int XOffset = 0;
             int YOffset = 0;
+
+            game_offscreen_buffer Buffer = {};
+            Buffer.Memory = GlobalBackBuffer.Memory;
+            Buffer.Width = GlobalBackBuffer.Width;
+            Buffer.Height = GlobalBackBuffer.Height;
+            Buffer.Pitch = GlobalBackBuffer.Pitch;
 
             SoundOutput = {0};
 
@@ -404,7 +392,9 @@ int main(/*int argc, char **argv*/)
                     }
                 }
 
-                RenderWeirdGradient(&GlobalBackBuffer, XOffset, YOffset);
+                GameUpdateAndRender(&Buffer, XOffset, YOffset);
+
+                // RenderWeirdGradient(&GlobalBackBuffer, XOffset, YOffset);
 
                 int TargetQueueBytes = SoundOutput.LatencySampleCount * SoundOutput.BytesPerSample;
                 int BytesToWrite = TargetQueueBytes - SDL_GetQueuedAudioSize(1);
@@ -426,8 +416,15 @@ int main(/*int argc, char **argv*/)
                 double MSPerFrame = (((1000.0f * (double)CounterElapsed) / (double)PerfCountFrequency));
                 double FPS = (double)PerfCountFrequency / (double)CounterElapsed;
 
-                printf("%.02f ms/f, %.02ff/s\n", MSPerFrame, FPS);
+                uint64_t EndCycleCount = _rdtsc();
+                uint64_t CyclesElapsed = EndCycleCount - LastCycleCount;
+
+                double MCPF = ((double)CyclesElapsed / (1000.0f * 1000.0f));
+
+                printf("%.02f ms/f, %.02f f/s, %.02f mc/f\n", MSPerFrame, FPS, MCPF);
+
                 LastCounter = EndCounter;
+                LastCycleCount = EndCycleCount;
             }
         }
         else
