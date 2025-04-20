@@ -1,18 +1,11 @@
 #include <SDL2/SDL.h>
 #include <cstdint>
-#include <math.h>
 #include <sys/mman.h>
 #include <x86intrin.h>
 
 #include "game.h"
 
-#define internal static
-#define local_persist static
-#define global_variable static
-
 #define MAX_CONTROLLERS 4
-
-#define Pi32 3.14159265359f
 
 struct sdl_sound_output
 {
@@ -26,13 +19,13 @@ struct sdl_sound_output
     int LatencySampleCount;
 };
 
-struct sdl_audio_ring_buffer
-{
-    int Size;
-    int WriteCursor;
-    int PlayCursor;
-    void *Data;
-};
+// struct sdl_audio_ring_buffer
+// {
+//     int Size;
+//     int WriteCursor;
+//     int PlayCursor;
+//     void *Data;
+// };
 
 struct sdl_window_dimension
 {
@@ -49,37 +42,45 @@ struct sdl_offscreen_buffer
     int Pitch;
 };
 
-global_variable sdl_sound_output SoundOutput;
-global_variable sdl_audio_ring_buffer AudioRingBuffer;
-global_variable sdl_offscreen_buffer GlobalBackBuffer;
+// aka global variable
+// static sdl_sound_output SoundOutput;
+// static sdl_audio_ring_buffer AudioRingBuffer;
+static sdl_offscreen_buffer SDLOffscreenBuffer;
 
 SDL_GameController *ControllerHandles[MAX_CONTROLLERS];
 SDL_Haptic *RumbleHandles[MAX_CONTROLLERS];
 
-internal void SDLFillSoundBuffer(sdl_sound_output *SoundOutput, int BytesToWrite)
+// aka internal function /// no export tables
+// static void SDLFillSoundBuffer(sdl_sound_output *SoundOutput, int BytesToWrite)
+// {
+//     void *SoundBuffer = malloc(BytesToWrite);
+//     int16_t *SampleOut = (int16_t *)SoundBuffer;
+//     int SampleCount = BytesToWrite / SoundOutput->BytesPerSample;
+//     for (int SampleIndex = 0; SampleIndex < SampleCount; ++SampleIndex)
+//     {
+//         float_t SineValue = sinf(SoundOutput->tSine);
+//         int16_t SampleValue = (int16_t)(SineValue * SoundOutput->ToneVolume);
+//         *SampleOut++ = SampleValue;
+//         *SampleOut++ = SampleValue;
+//
+//         SoundOutput->tSine += 2.0f * Pi32 * 1.0f / (float)SoundOutput->WavePeriod;
+//         ++SoundOutput->RunningSampleIndex;
+//     }
+//
+//     SDL_QueueAudio(1, SoundBuffer, BytesToWrite);
+//     free(SoundBuffer);
+// }
+
+static void SDLFillSoundBuffer(
+    sdl_sound_output *SoundOutput, int ByteToLock, int BytesToWrite, game_sound_output_buffer *SoundBuffer
+)
 {
-    void *SoundBuffer = malloc(BytesToWrite);
-    int16_t *SampleOut = (int16_t *)SoundBuffer;
-    int SampleCount = BytesToWrite / SoundOutput->BytesPerSample;
-    for (int SampleIndex = 0; SampleIndex < SampleCount; ++SampleIndex)
-    {
-        // float_t t = 2.0f * Pi32 * SoundOutput->RunningSampleIndex / (float_t)SoundOutput->WavePeriod;
-        float_t SineValue = sinf(SoundOutput->tSine);
-        int16_t SampleValue = (int16_t)(SineValue * SoundOutput->ToneVolume);
-        *SampleOut++ = SampleValue;
-        *SampleOut++ = SampleValue;
-
-        SoundOutput->tSine += 2.0f * Pi32 * 1.0f / (float)SoundOutput->WavePeriod;
-        ++SoundOutput->RunningSampleIndex;
-    }
-
-    SDL_QueueAudio(1, SoundBuffer, BytesToWrite);
-    free(SoundBuffer);
+    SDL_QueueAudio(1, SoundBuffer->Samples, BytesToWrite);
 }
 
-internal void SDLInitAudio(int32_t SamplesPerSecond, int32_t BufferSize)
+static void SDLInitAudio(int32_t SamplesPerSecond, int32_t BufferSize)
 {
-    SDL_AudioSpec AudioSettings = {0};
+    SDL_AudioSpec AudioSettings = {};
 
     AudioSettings.freq = SamplesPerSecond;
     AudioSettings.format = AUDIO_S16LSB;
@@ -96,7 +97,7 @@ internal void SDLInitAudio(int32_t SamplesPerSecond, int32_t BufferSize)
     }
 }
 
-internal void SDLInitGameControllers()
+static void SDLInitGameControllers()
 {
     int MaxJoysticks = SDL_NumJoysticks();
     int ControllerIndex = 0;
@@ -131,7 +132,7 @@ internal void SDLInitGameControllers()
     }
 }
 
-internal void SDLCloseGameControllers()
+static void SDLCloseGameControllers()
 {
     for (int ControllerIndex = 0; ControllerIndex < MAX_CONTROLLERS; ++ControllerIndex)
     {
@@ -151,10 +152,10 @@ sdl_window_dimension SDLGetWindowDimension(SDL_Window *Window)
 {
     sdl_window_dimension Result;
     SDL_GetWindowSize(Window, &Result.Width, &Result.Height);
-    return (Result);
+    return Result;
 }
 
-internal void SDLResizeTexture(sdl_offscreen_buffer *Buffer, SDL_Renderer *Renderer, int Width, int Height)
+static void SDLResizeTexture(sdl_offscreen_buffer *Buffer, SDL_Renderer *Renderer, int Width, int Height)
 {
     const int BytesPerPixel = 4;
 
@@ -176,11 +177,9 @@ internal void SDLResizeTexture(sdl_offscreen_buffer *Buffer, SDL_Renderer *Rende
         mmap(0, Width * Height * BytesPerPixel, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 
     Buffer->Pitch = Width * BytesPerPixel;
-
-    // RenderWeirdGradient(&GlobalBackBuffer, 0, 0);
 }
 
-internal void SDLUpdateWindow(sdl_offscreen_buffer *Buffer, SDL_Renderer *Renderer)
+static void SDLUpdateWindow(sdl_offscreen_buffer *Buffer, SDL_Renderer *Renderer)
 {
     SDL_UpdateTexture(Buffer->Texture, 0, Buffer->Memory, Buffer->Pitch);
     SDL_RenderCopy(Renderer, Buffer->Texture, 0, 0);
@@ -209,14 +208,14 @@ bool HandleEvent(SDL_Event *Event)
             // SDL_Window *Window = SDL_GetWindowFromID(Event->window.windowID);
             // SDL_Renderer *Renderer = SDL_GetRenderer(Window);
             // printf("SDL_WINDOWEVENT_SIZE_CHANGED (%d, %d)\n", Event->window.data1, Event->window.data2);
-            // SDLResizeTexture(&GlobalBackBuffer, Renderer, Event->window.data1, Event->window.data2);
+            // SDLResizeTexture(&SDLOffscreenBuffer, Renderer, Event->window.data1, Event->window.data2);
         }
         break;
         case SDL_WINDOWEVENT_EXPOSED:
         {
             SDL_Window *Window = SDL_GetWindowFromID(Event->window.windowID);
             SDL_Renderer *Renderer = SDL_GetRenderer(Window);
-            SDLUpdateWindow(&GlobalBackBuffer, Renderer);
+            SDLUpdateWindow(&SDLOffscreenBuffer, Renderer);
         }
         break;
         }
@@ -237,20 +236,20 @@ bool HandleEvent(SDL_Event *Event)
         {
             if (KeyCode == SDLK_SPACE && Event->key.state == 1)
             {
-                SoundOutput.ToneHz = 512;
-                SoundOutput.WavePeriod = SoundOutput.SamplesPerSecond / SoundOutput.ToneHz;
+                // SoundOutput.ToneHz = 512;
+                // SoundOutput.WavePeriod = SoundOutput.SamplesPerSecond / SoundOutput.ToneHz;
             }
             else if (KeyCode == SDLK_SPACE && Event->key.state == 0)
             {
-                SoundOutput.ToneHz = 256;
-                SoundOutput.WavePeriod = SoundOutput.SamplesPerSecond / SoundOutput.ToneHz;
+                // SoundOutput.ToneHz = 256;
+                // SoundOutput.WavePeriod = SoundOutput.SamplesPerSecond / SoundOutput.ToneHz;
             }
             printf("%d %d\n", Event->key.keysym.sym, Event->key.state);
         }
     }
     break;
     }
-    return (ShouldQuit);
+    return ShouldQuit;
 }
 
 int main(/*int argc, char **argv*/)
@@ -264,9 +263,6 @@ int main(/*int argc, char **argv*/)
     SDLInitGameControllers();
 
     uint64_t PerfCountFrequency = SDL_GetPerformanceFrequency();
-    uint64_t LastCounter = SDL_GetPerformanceCounter();
-
-    uint64_t LastCycleCount = _rdtsc();
 
     if (Window)
     {
@@ -276,17 +272,11 @@ int main(/*int argc, char **argv*/)
         {
             bool Running = true;
             sdl_window_dimension Dimension = SDLGetWindowDimension(Window);
-            SDLResizeTexture(&GlobalBackBuffer, Renderer, Dimension.Width, Dimension.Height);
+            SDLResizeTexture(&SDLOffscreenBuffer, Renderer, Dimension.Width, Dimension.Height);
             int XOffset = 0;
             int YOffset = 0;
 
-            game_offscreen_buffer Buffer = {};
-            Buffer.Memory = GlobalBackBuffer.Memory;
-            Buffer.Width = GlobalBackBuffer.Width;
-            Buffer.Height = GlobalBackBuffer.Height;
-            Buffer.Pitch = GlobalBackBuffer.Pitch;
-
-            SoundOutput = {0};
+            sdl_sound_output SoundOutput = {};
 
             SoundOutput.SamplesPerSecond = 48000;
             SoundOutput.ToneHz = 256;
@@ -294,11 +284,17 @@ int main(/*int argc, char **argv*/)
             SoundOutput.RunningSampleIndex = 0;
             SoundOutput.WavePeriod = SoundOutput.SamplesPerSecond / SoundOutput.ToneHz;
             SoundOutput.BytesPerSample = sizeof(int16_t) * 2;
-            SoundOutput.LatencySampleCount = SoundOutput.SamplesPerSecond / 15;
-            // SDLFillSoundBuffer(&SoundOutput, BytesToWrite);
+            SoundOutput.LatencySampleCount = SoundOutput.SamplesPerSecond / 30;
 
             SDLInitAudio(SoundOutput.SamplesPerSecond, SoundOutput.SamplesPerSecond * SoundOutput.BytesPerSample / 60);
-            bool SoundIsPlaying = false;
+
+            int16_t *Samples = (int16_t *)calloc(SoundOutput.LatencySampleCount, SoundOutput.BytesPerSample);
+            // SDL_PauseAudio(0);
+
+            uint64_t LastCounter = SDL_GetPerformanceCounter();
+            uint64_t LastCycleCount = _rdtsc();
+
+            SDL_PauseAudio(0);
 
             while (Running)
             {
@@ -392,24 +388,25 @@ int main(/*int argc, char **argv*/)
                     }
                 }
 
-                GameUpdateAndRender(&Buffer, XOffset, YOffset);
-
-                // RenderWeirdGradient(&GlobalBackBuffer, XOffset, YOffset);
-
                 int TargetQueueBytes = SoundOutput.LatencySampleCount * SoundOutput.BytesPerSample;
                 int BytesToWrite = TargetQueueBytes - SDL_GetQueuedAudioSize(1);
-                SDLFillSoundBuffer(&SoundOutput, BytesToWrite);
+                game_sound_output_buffer SoundBuffer = {};
+                SoundBuffer.SamplesPerSecond = SoundOutput.SamplesPerSecond;
+                SoundBuffer.SampleCount = BytesToWrite / SoundOutput.BytesPerSample;
+                SoundBuffer.Samples = Samples;
 
-                if (!SoundIsPlaying)
-                {
-                    SDL_PauseAudio(0);
-                    SoundIsPlaying = true;
-                }
+                game_offscreen_buffer GameOffscreenBuffer = {};
+                GameOffscreenBuffer.Memory = SDLOffscreenBuffer.Memory;
+                GameOffscreenBuffer.Width = SDLOffscreenBuffer.Width;
+                GameOffscreenBuffer.Height = SDLOffscreenBuffer.Height;
+                GameOffscreenBuffer.Pitch = SDLOffscreenBuffer.Pitch;
 
-                SDLUpdateWindow(&GlobalBackBuffer, Renderer);
+                GameUpdateAndRender(&GameOffscreenBuffer, XOffset, YOffset, &SoundBuffer, SoundOutput.ToneHz);
 
-                // ++XOffset;
-                // YOffset += 2;
+                SDLFillSoundBuffer(&SoundOutput, 0, BytesToWrite, &SoundBuffer);
+
+                SDLUpdateWindow(&SDLOffscreenBuffer, Renderer);
+
                 uint64_t EndCounter = SDL_GetPerformanceCounter();
                 uint64_t CounterElapsed = EndCounter - LastCounter;
 
@@ -442,5 +439,5 @@ int main(/*int argc, char **argv*/)
     SDL_CloseAudio();
 
     SDL_Quit();
-    return (0);
+    return 0;
 }
