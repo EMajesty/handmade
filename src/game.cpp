@@ -2,7 +2,7 @@
 
 void GameOutputSound(game_sound_output_buffer *SoundBuffer, int ToneHz)
 {
-    float tSine;
+    static float tSine;
     int16_t ToneVolume = 3000;
     // int ToneHz = 256;
     int WavePeriod = SoundBuffer->SamplesPerSecond / ToneHz;

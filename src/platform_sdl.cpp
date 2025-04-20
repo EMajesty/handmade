@@ -284,17 +284,15 @@ int main(/*int argc, char **argv*/)
             SoundOutput.RunningSampleIndex = 0;
             SoundOutput.WavePeriod = SoundOutput.SamplesPerSecond / SoundOutput.ToneHz;
             SoundOutput.BytesPerSample = sizeof(int16_t) * 2;
-            SoundOutput.LatencySampleCount = SoundOutput.SamplesPerSecond / 30;
+            SoundOutput.LatencySampleCount = SoundOutput.SamplesPerSecond / 15;
 
             SDLInitAudio(SoundOutput.SamplesPerSecond, SoundOutput.SamplesPerSecond * SoundOutput.BytesPerSample / 60);
 
             int16_t *Samples = (int16_t *)calloc(SoundOutput.LatencySampleCount, SoundOutput.BytesPerSample);
-            // SDL_PauseAudio(0);
+            SDL_PauseAudio(0);
 
             uint64_t LastCounter = SDL_GetPerformanceCounter();
             uint64_t LastCycleCount = _rdtsc();
-
-            SDL_PauseAudio(0);
 
             while (Running)
             {
